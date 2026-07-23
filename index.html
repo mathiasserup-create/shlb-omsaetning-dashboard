@@ -277,7 +277,7 @@
     <div class="card">
       <div class="hd">
         <div>
-          <h2>Omsætning over tid</h2>
+          <h2>Kassesalg over tid</h2>
           <div class="note" id="mainnote"></div>
         </div>
       </div>
@@ -293,7 +293,8 @@
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <div class="seg" id="ymetric" role="group" aria-label="Mål">
-            <button data-m="all" aria-pressed="true">Alt salg</button>
+            <button data-m="kasse" aria-pressed="true">Kassesalg</button>
+            <button data-m="eco">Bogført</button>
             <button data-m="begr">Begravelse</button>
           </div>
           <div class="seg" id="ymode" role="group" aria-label="Visning">
@@ -400,7 +401,7 @@ document.getElementById('asof').textContent=fmtDate(DATA.generated);
 document.getElementById('period').textContent=fmtDate(DATA.pos_period[0])+' – '+fmtDate(DATA.pos_period[1]);
 
 // ---------- state ----------
-const st={gran:'month', vat:'incl', overlay:'off', yc:'cum', ymetric:'all', r0:0, r1:N-1};
+const st={gran:'month', vat:'incl', overlay:'off', yc:'cum', ymetric:'kasse', r0:0, r1:N-1};
 const YEARS=[...new Set(days.map(d=>d.d.slice(0,4)))].sort();
 const YCOL={};YEARS.forEach((y,i)=>{YCOL[y]=['var(--s7)','var(--eco)','var(--pos)','var(--s6)'][i]||'var(--muted)';});
 // monthly totals per year (incl moms base) — alt salg + begravelse
@@ -408,6 +409,16 @@ const MTOT={},MTOTB={};YEARS.forEach(y=>{MTOT[y]=Array(12).fill(null);MTOTB[y]=A
 for(const r of days){const y=r.d.slice(0,4),m=+r.d.slice(5,7)-1;
   MTOT[y][m]=(MTOT[y][m]||0)+r.t;
   MTOTB[y][m]=(MTOTB[y][m]||0)+(r.cat['Begravelsesbinderi']||0);}
+// e-conomic BOGFØRT omsætning (ALLE posteringer, ekskl. moms) — den autoritative omsætning
+const ECO={},ECOY={};
+for(const[mk,v] of Object.entries(DATA.eco_monthly)){const y=mk.slice(0,4),m=+mk.slice(5,7)-1;
+  if(!ECO[y])ECO[y]=Array(12).fill(null);
+  ECO[y][m]=(ECO[y][m]||0)+(v.total||0);
+  ECOY[y]=(ECOY[y]||0)+(v.total||0);}
+// bogført omsætning for de måneder der overlapper en given dag-window
+function ecoInRange(){const win=days.slice(st.r0,st.r1+1);if(!win.length)return 0;
+  const a=win[0].d.slice(0,7),b=win[win.length-1].d.slice(0,7);let s=0;
+  for(const[mk,v] of Object.entries(DATA.eco_monthly))if(mk>=a&&mk<=b)s+=v.total||0;return s;}
 const CURYEAR=YEARS[YEARS.length-1];
 // last month with data in current year (0-based)
 let CURLAST=-1;MTOT[CURYEAR].forEach((v,m)=>{if(v!=null)CURLAST=m;});
@@ -497,23 +508,23 @@ function renderKPI(bk){
   const yrs=[...new Set(days.slice(st.r0,st.r1+1).map(d=>d.d.slice(0,4)))];
   let yoy=null,yoyLabel='';
   if(yrs.length===1){const y=yrs[0];const py=String(+y-1);
-    // fair sammenligning: kun måneder der findes i BEGGE år
-    const mCur=new Set(days.filter(d=>d.d.startsWith(y)).map(d=>d.d.slice(5,7)));
-    const mPrev=new Set(days.filter(d=>d.d.startsWith(py)).map(d=>d.d.slice(5,7)));
-    const common=[...mCur].filter(m=>mPrev.has(m));
-    if(common.length){
-      const sum=yy=>days.filter(d=>d.d.startsWith(yy)&&common.includes(d.d.slice(5,7))).reduce((s,d)=>s+d.t,0);
-      const cur=sum(y),prev=sum(py);
-      if(prev>0){yoy=cur/prev-1;yoyLabel=`vs. ${py} · samme ${common.length} mdr.`;}
-    }
+    // bogført omsætning, kun måneder der findes i BEGGE år (fair)
+    if(ECO[y]&&ECO[py]){let a=0,b=0,n=0;
+      for(let mi=0;mi<12;mi++){if(ECO[y][mi]!=null&&ECO[py][mi]!=null){a+=ECO[y][mi];b+=ECO[py][mi];n++;}}
+      if(b>0&&n>0){yoy=a/b-1;yoyLabel=`vs. ${py} · samme ${n} mdr.`;}}
   }
+  const rawKasse=bk.reduce((s,b)=>s+b.t,0);      // kassesalg inkl. moms
+  const ecoSel=ecoInRange();                      // bogført omsætning (ekskl. moms, alle posteringer)
+  const udenom=ecoSel-rawKasse/1.25;              // fakturasalg mv. uden om kassen (ekskl. moms)
   const tiles=[
-    {k:'Omsætning · valgt periode',v:kr(tot),d:st.vat==='incl'?'inkl. moms':'ekskl. moms',accent:true},
-    {k:'Begravelsesbinderi',v:pct(share),d:kr(begr)+' af salget'},
-    {k:'Gns. omsætning / dag',v:kr(ndays?tot/ndays:0),d:`${ndays} åbningsdage`},
+    {k:'Bogført omsætning · valgt periode',v:kr(ecoSel),d:'ekskl. moms · alle posteringer (e-conomic)',accent:true},
+    {k:'Kassesalg · valgt periode',v:kr(tot),d:st.vat==='incl'?'inkl. moms (OnlinePOS)':'ekskl. moms (OnlinePOS)'},
+    {k:'Uden om kassen',v:kr(udenom),d:'fakturasalg mv. · ekskl. moms'},
+    {k:'Begravelsesbinderi',v:pct(share),d:kr(begr)+' af kassesalget'},
+    {k:'Gns. kassesalg / dag',v:kr(ndays?tot/ndays:0),d:`${ndays} åbningsdage`},
     {k:'Antal varelinjer',v:nlin.toLocaleString('da-DK'),d:kr(nlin?tot/nlin:0)+' pr. linje'},
   ];
-  if(yoy!==null)tiles.splice(1,0,{k:'Vækst',v:(yoy>=0?'+':'')+pct(yoy).replace('%','')+'%',
+  if(yoy!==null)tiles.splice(1,0,{k:'Vækst (bogført)',v:(yoy>=0?'+':'')+pct(yoy).replace('%','')+'%',
     d:yoyLabel,cls:yoy>=0?'up':'down',isDelta:true});
   $('#kpis').innerHTML=tiles.map(t=>`<div class="kpi${t.accent?' accent':''}">
     <div class="k">${t.k}</div>
@@ -627,9 +638,11 @@ function groupedBars(svg, groups, seriesKeys, colors){
 function yearOverlay(){
   const svg=$('#yearchart');
   const W=900,H=300,mL=52,mR=16,mT=14,mB=26,iw=W-mL-mR,ih=H-mT-mB;
-  const f=vf(),cum=st.yc==='cum',metric=st.ymetric;
-  const SRC=metric==='begr'?MTOTB:MTOT;
-  const showBudget=metric==='all'&&budgetTotal()>0;
+  const cum=st.yc==='cum',metric=st.ymetric;
+  const isEco=metric==='eco';
+  const SRC=isEco?ECO:(metric==='begr'?MTOTB:MTOT);
+  const f=isEco?1:vf();                       // bogført er altid ekskl. moms
+  const showBudget=metric==='kasse'&&budgetTotal()>0;
   // build per-year month series (apply moms + optional cumulative)
   const ser=YEARS.map(y=>{
     const firstM=SRC[y].findIndex(v=>v!=null);
@@ -687,14 +700,20 @@ function yearOverlay(){
     tip.style.top=Math.max(8,e.clientY-tr.height-12)+'px';
   });
   hit.addEventListener('pointerleave',()=>{ch.style.opacity=0;tip.style.opacity=0;});
-  const mlab=metric==='begr'?'begravelsesbinderi':'omsætning';
-  $('#yearnote').textContent=cum
-    ?`Akkumuleret ${mlab} år-til-dato (${st.vat==='incl'?'inkl.':'ekskl.'} moms). ${CURYEAR}-linjen viser, om I er foran eller bagud.`
-    :`${metric==='begr'?'Begravelsesbinderi':'Omsætning'} pr. måned, år oven på hinanden (${st.vat==='incl'?'inkl.':'ekskl.'} moms). Viser sæsonformen.`;
+  const mlab=isEco?'bogført omsætning':metric==='begr'?'begravelsesbinderi':'kassesalg';
+  const momslab=isEco?'ekskl. moms · alle posteringer':(st.vat==='incl'?'inkl.':'ekskl.')+' moms';
+  const ecoWarn=isEco?` ⚠ ${CURYEAR} er endnu ikke fuldt bogført — sammenlign kun hele år.`:'';
+  $('#yearnote').textContent=(cum
+    ?`Akkumuleret ${mlab} år-til-dato (${momslab}). ${CURYEAR}-linjen viser, om I er foran eller bagud.`
+    :`${mlab.charAt(0).toUpperCase()+mlab.slice(1)} pr. måned, år oven på hinanden (${momslab}). Viser sæsonformen.`)+ecoWarn;
   $('#yearlegend').innerHTML=YEARS.map(y=>`<span class="it"><span class="swatch ln" style="background:${YCOL[y]}"></span>${y}${y===CURYEAR?' (i år)':''}</span>`).join('')+
     (bpts?`<span class="it"><span class="swatch ln" style="background:var(--warn-ink)"></span>Budget ${budget.year}</span>`:'');
-  // growth badge: dags-præcis år-til-dato (samme dato begge år)
-  const py=String(+CURYEAR-1);const a=ytd(CURYEAR,metric),b=ytd(py,metric);
+  // growth badge: år-til-dato (bogført: hele mdr.; kasse/begr: dags-præcist samme dato)
+  const py=String(+CURYEAR-1);let a,b;
+  if(isEco){a=0;b=0;for(let mi=0;mi<=CLASTFULL;mi++){
+    if(ECO[CURYEAR]&&ECO[CURYEAR][mi]!=null)a+=ECO[CURYEAR][mi];
+    if(ECO[py]&&ECO[py][mi]!=null)b+=ECO[py][mi];}}
+  else{a=ytd(CURYEAR,metric);b=ytd(py,metric);}
   const badge=$('#yoybadge');
   if(b>0){const gr=a/b-1;const cls=gr>=0?'pos':'neg';
     badge.className=`badge ${cls}`;
