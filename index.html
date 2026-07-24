@@ -631,14 +631,19 @@ function renderHistList(el,entries,daily){if(!el)return;
   el.innerHTML=entries.map(e=>`<div class="histrow"><span class="histwhen">${fmtWhen(e.ts,daily)}</span>
     <span class="histby">${e.by?esc(e.by):'—'}</span><span class="histtot">${kr(e.total)}</span>
     <button class="btn histbtn" data-snap="${e.id}">Gendan</button></div>`).join('');
-  el.querySelectorAll('.histbtn').forEach(b=>b.addEventListener('click',()=>restoreSnapshot(+b.dataset.snap,b)));}
-async function restoreSnapshot(id,btn){
-  if(btn&&btn.dataset.confirm!=='1'){btn.dataset.confirm='1';btn.textContent='Bekræft?';btn.classList.add('save-dirty');
-    setTimeout(()=>{if(btn){btn.dataset.confirm='0';btn.textContent='Gendan';btn.classList.remove('save-dirty');}},3500);return;}
+  el.querySelectorAll('.histbtn').forEach(b=>b.addEventListener('click',()=>{
+    if(b.dataset.confirm==='1'){restoreSnapshot(+b.dataset.snap);return;}
+    // to-klik-bekræftelse (nulstiller efter 4 sek.)
+    el.querySelectorAll('.histbtn').forEach(o=>{o.dataset.confirm='0';o.textContent='Gendan';o.classList.remove('save-dirty');});
+    b.dataset.confirm='1';b.textContent='Bekræft ✓';b.classList.add('save-dirty');
+    setTimeout(()=>{if(b&&b.dataset.confirm==='1'){b.dataset.confirm='0';b.textContent='Gendan';b.classList.remove('save-dirty');}},4000);
+  }));}
+async function restoreSnapshot(id){
+  const el=$('#bstatus');if(el){el.className='savestatus save-pending';el.textContent='↩ Gendanner…';}
   try{const j=await fetch(apiCfg.url+'?snapshot='+id,{headers:{'X-Budget-Token':apiCfg.token}}).then(r=>r.json());
-    if(j&&j.ok&&j.budget){budget=normBudget(j.budget);render();markDirty();
-      const el=$('#bstatus');if(el){el.className='savestatus save-pending';el.textContent='↩ Gendannet — gemmer…';}}
-  }catch(e){}}
+    if(j&&j.ok&&j.budget){budget=normBudget(j.budget);render();markDirty();}
+    else if(el){el.className='savestatus save-warn';el.textContent='⚠ Kunne ikke gendanne';}
+  }catch(e){if(el){el.className='savestatus save-warn';el.textContent='⚠ Kunne ikke gendanne';}}}
 
 // ---------- helpers ----------
 function fmtDate(s){const[y,m,d]=s.split('-');return `${d}.${m}.${y.slice(2)}`;}
