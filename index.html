@@ -321,6 +321,13 @@
           <div class="money"><input id="binput" type="text" inputmode="numeric" placeholder="0"><span class="cur">kr</span></div>
         </div>
         <div class="field">
+          <span class="lbl">Opdeling</span>
+          <div class="seg" id="bgran" role="group" aria-label="Budget-opdeling">
+            <button data-bg="month" aria-pressed="true">Måned</button>
+            <button data-bg="week">Uge</button>
+          </div>
+        </div>
+        <div class="field">
           <span class="lbl">&nbsp;</span>
           <button class="btn primary" id="bdistribute">Fordel efter 2025-sæson</button>
         </div>
@@ -433,9 +440,31 @@ const BKEY='shlb_budget_v1';
 const storageOK=(()=>{try{localStorage.setItem('__t','1');localStorage.removeItem('__t');return true;}catch(e){return false;}})();
 let dirty=false;
 let budget=loadBudget();
+function normBudget(b){b=b||{};b.year=b.year||CURYEAR;
+  if(!Array.isArray(b.monthly)||b.monthly.length!==12)b.monthly=Array(12).fill(0);
+  if(!Array.isArray(b.weekly)||b.weekly.length!==54)b.weekly=Array(54).fill(0);
+  if(b.gran!=='week')b.gran='month';return b;}
 function loadBudget(){try{const j=JSON.parse(localStorage.getItem(BKEY));
-  if(j&&Array.isArray(j.monthly)&&j.monthly.length===12)return j;}catch(e){}
-  return{year:CURYEAR,monthly:Array(12).fill(0)};}
+  if(j&&(Array.isArray(j.monthly)||Array.isArray(j.weekly)))return normBudget(j);}catch(e){}
+  return normBudget({year:CURYEAR});}
+// ISO-uge → måned (torsdagens måned) for budgetåret
+let _WM=null,_WMy=null;
+function weekMonth(){if(_WM&&_WMy===budget.year)return _WM;const y=+budget.year,wm={};
+  for(let mo=0;mo<12;mo++)for(let da=1;da<=31;da++){const dt=new Date(y,mo,da);
+    if(dt.getMonth()!==mo)continue;
+    if(dt.getDay()===4){const ds=`${y}-${String(mo+1).padStart(2,'0')}-${String(da).padStart(2,'0')}`;
+      const w=isoWeek(ds)[1];if(wm[w]==null)wm[w]=mo;}}
+  _WM=wm;_WMy=budget.year;return wm;}
+function weeksInBudgetYear(){return Math.max(...Object.keys(weekMonth()).map(Number));}
+// budget pr. måned (fælles nævner uanset om der er indtastet pr. måned eller uge)
+function budgetMonthly(){if(budget.gran!=='week')return budget.monthly.map(x=>+x||0);
+  const m=Array(12).fill(0),wm=weekMonth();
+  for(let w=1;w<=53;w++){const mo=wm[w];if(mo!=null)m[mo]+=+budget.weekly[w]||0;}return m;}
+// faktisk kassesalg pr. ISO-uge i budgetåret
+function posWeekly(){const wk={};for(const r of days){const[wy,w]=isoWeek(r.d);if(wy==budget.year)wk[w]=(wk[w]||0)+r.t;}return wk;}
+function weekWeights(){const wk={};for(const r of days){const[wy,w]=isoWeek(r.d);if(wy===2025)wk[w]=(wk[w]||0)+r.t;}
+  const tot=Object.values(wk).reduce((a,b)=>a+b,0);const nW=weeksInBudgetYear();const out={};
+  for(let i=1;i<=nW;i++)out[i]=tot?(wk[i]||0)/tot:1/nW;return out;}
 function persist(){try{localStorage.setItem(BKEY,JSON.stringify(budget));return true;}catch(e){return false;}}
 function markDirty(){dirty=true;updateSaveButton();}
 async function doSave(){budget.savedAt=new Date().toISOString();
@@ -458,13 +487,19 @@ function updateSaveButton(){const b=$('#bsave');if(!b)return;
   if(dirty){b.className='btn save-dirty';b.textContent='● Gem ændringer (IKKE gemt)';}
   else if(budget.savedAt){b.className='btn save-clean';b.textContent='✓ Gemt'+(apiCfg?' (fælles)':'')+' '+fmtSaved(budget.savedAt);}
   else{b.className='btn';b.textContent='Gem budget';}}
-function budgetTotal(){return budget.monthly.reduce((s,v)=>s+(+v||0),0);}
+function budgetTotal(){return budgetMonthly().reduce((s,v)=>s+(+v||0),0);}
 function seasonWeights(){ // 2025-sæson (fallback: jævnt)
   const src=MTOT['2025']||[];const tot=src.reduce((s,v)=>s+(v||0),0);
   if(tot>0)return src.map(v=>(v||0)/tot);
   return Array(12).fill(1/12);}
-function distributeSeason(annual){const w=seasonWeights();budget.monthly=w.map(x=>Math.round(annual*x));}
-function distributeFlat(annual){budget.monthly=Array(12).fill(Math.round(annual/12));}
+function distributeSeason(annual){
+  if(budget.gran==='week'){const w=weekWeights();budget.weekly=Array(54).fill(0);
+    for(let i=1;i<=53;i++)budget.weekly[i]=Math.round(annual*(w[i]||0));}
+  else{const w=seasonWeights();budget.monthly=w.map(x=>Math.round(annual*x));}}
+function distributeFlat(annual){
+  if(budget.gran==='week'){const n=weeksInBudgetYear();budget.weekly=Array(54).fill(0);
+    for(let i=1;i<=n;i++)budget.weekly[i]=Math.round(annual/n);}
+  else budget.monthly=Array(12).fill(Math.round(annual/12));}
 // fælles budget-database (kun til stede i den krypterede live-version)
 const apiCfg=(DATA&&DATA.api)?DATA.api:null;
 async function apiGet(){const r=await fetch(apiCfg.url,{headers:{'X-Budget-Token':apiCfg.token}});
@@ -474,8 +509,8 @@ async function apiPut(b){const r=await fetch(apiCfg.url,{method:'POST',
   body:JSON.stringify({budget:b,by:''})});if(!r.ok)throw new Error('put '+r.status);return await r.json();}
 async function syncFromServer(){if(!apiCfg)return;
   try{const j=await apiGet();
-    if(j&&j.ok&&j.budget&&Array.isArray(j.budget.monthly)&&j.budget.monthly.length===12){
-      budget={year:j.budget.year||CURYEAR,monthly:j.budget.monthly.map(x=>+x||0),savedAt:j.updated_at||null};
+    if(j&&j.ok&&j.budget&&(Array.isArray(j.budget.monthly)||Array.isArray(j.budget.weekly))){
+      budget=normBudget(j.budget);budget.savedAt=j.updated_at||budget.savedAt||null;
       dirty=false;render();}
   }catch(e){/* offline → behold lokal kopi */}}
 
@@ -690,7 +725,7 @@ function yearOverlay(){
   });
   // budget series (inkl moms base × f)
   let bpts=null;
-  if(showBudget){let run=0;bpts=budget.monthly.map(v=>{const val=(+v||0)*f;if(cum){run+=val;return run;}return val;});}
+  if(showBudget){const bm=budgetMonthly();let run=0;bpts=bm.map(v=>{const val=(+v||0)*f;if(cum){run+=val;return run;}return val;});}
   let max=0;ser.forEach(s=>s.pts.forEach(v=>{if(v!=null)max=Math.max(max,v);}));
   if(bpts)bpts.forEach(v=>{if(v!=null)max=Math.max(max,v);});
   max=niceMax(max||1);
@@ -788,23 +823,31 @@ function renderBudget(){
   $('#budgetyear').textContent=budget.year;
   const total=budgetTotal();
   const bi=$('#binput');if(document.activeElement!==bi)bi.value=total?total.toLocaleString('da-DK'):'';
-  $('#bmonths').innerHTML=MON.map((mn,m)=>{
-    const passed=(+budget.year===+CURYEAR)&&m<=CURLAST;
-    const actual=MTOT[CURYEAR]?MTOT[CURYEAR][m]:null;
-    let stt='';
-    if(passed&&actual!=null&&budget.monthly[m]>0){const d=actual/budget.monthly[m]-1;
+  const curYr=(+budget.year===+CURYEAR);
+  const cell=(k,i,label,bv,actual,passed)=>{let stt='';
+    if(passed&&actual!=null&&bv>0){const d=actual/bv-1;
       stt=`<span class="st" style="color:${d>=0?'var(--good)':'#c0392b'}">${d>=0?'+':''}${Math.round(d*100)}%</span>`;}
     return `<div class="mcell${passed?' done':''}">
-      <div class="mn"><span>${mn}${passed?' ✓':''}</span>${stt}</div>
-      <input data-m="${m}" type="text" inputmode="numeric" value="${budget.monthly[m]?budget.monthly[m].toLocaleString('da-DK'):''}" placeholder="0"></div>`;
-  }).join('');
+      <div class="mn"><span>${label}${passed?' ✓':''}</span>${stt}</div>
+      <input data-k="${k}" data-i="${i}" type="text" inputmode="numeric" value="${bv?bv.toLocaleString('da-DK'):''}" placeholder="0"></div>`;};
+  let cellsHtml;
+  if(budget.gran==='week'){const pw=posWeekly(),nW=weeksInBudgetYear();
+    cellsHtml=Array.from({length:nW},(_,x)=>x+1).map(w=>{const a=pw[w];
+      return cell('w',w,'u'+w,+budget.weekly[w]||0,a==null?null:a,curYr&&a!=null);}).join('');
+  }else{cellsHtml=MON.map((mn,m)=>cell('m',m,mn,+budget.monthly[m]||0,
+      MTOT[CURYEAR]?MTOT[CURYEAR][m]:null,curYr&&m<=CURLAST)).join('');}
+  const gEl=$('#bmonths');gEl.innerHTML=cellsHtml;
+  gEl.style.maxHeight=budget.gran==='week'?'300px':'';gEl.style.overflowY=budget.gran==='week'?'auto':'';
+  $$('#bgran button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.bg===budget.gran?'true':'false'));
   $$('#bmonths input').forEach(inp=>inp.addEventListener('change',()=>{
-    budget.monthly[+inp.dataset.m]=parseInt(inp.value.replace(/\D/g,''))||0;markDirty();render();}));
+    const val=parseInt(inp.value.replace(/\D/g,''))||0;
+    if(inp.dataset.k==='w')budget.weekly[+inp.dataset.i]=val;else budget.monthly[+inp.dataset.i]=val;
+    markDirty();render();}));
   const total25=(MTOT['2025']||[]).reduce((s,v)=>s+(v||0),0);
   const parts=[`<div class="bs"><span class="k">Budget i alt ${budget.year}</span><span class="v">${kr(total)}</span></div>`];
   if(total>0&&total25>0){const gr=total/total25-1;
     parts.push(`<div class="bs"><span class="k">Implicit vækst vs. 2025</span><span class="v"><span class="badge ${gr>=0?'pos':'neg'}">${gr>=0?'+':''}${(gr*100).toLocaleString('da-DK',{maximumFractionDigits:1})}%</span></span></div>`);}
-  if(total>0){let bY=0,aY=0;for(let m=0;m<=CLASTFULL;m++){bY+=+budget.monthly[m]||0;aY+=MTOT[CURYEAR][m]||0;}
+  if(total>0){const bm=budgetMonthly();let bY=0,aY=0;for(let m=0;m<=CLASTFULL;m++){bY+=+bm[m]||0;aY+=MTOT[CURYEAR][m]||0;}
     if(bY>0){const v=aY/bY-1;
       parts.push(`<div class="bs"><span class="k">Status vs. budget (hele mdr. t.o.m. ${MON[CLASTFULL]})</span><span class="v"><span class="badge ${v>=0?'pos':'neg'}">${v>=0?'▲ foran +':'▼ bagud '}${(v*100).toLocaleString('da-DK',{maximumFractionDigits:1})}%</span></span></div>`);
       parts.push(`<div class="bs"><span class="k">Faktisk / budget (t.o.m. ${MON[CLASTFULL]})</span><span class="v" style="font-size:15px">${kr(aY)} / ${kr(bY)}</span></div>`);}}
@@ -820,8 +863,8 @@ async function exportBudget(){const data=JSON.stringify(budget,null,2);const fn=
   if(window.claude&&window.claude.downloads){try{await window.claude.downloads.save({filename:fn,data});}
     catch(e){if(e&&e.code==='declined')return;fallbackDownload(fn,data);}}else fallbackDownload(fn,data);}
 function importBudget(e){const file=e.target.files[0];if(!file)return;const rd=new FileReader();
-  rd.onload=()=>{try{const j=JSON.parse(rd.result);if(j&&Array.isArray(j.monthly)&&j.monthly.length===12){
-    budget={year:j.year||CURYEAR,monthly:j.monthly.map(x=>+x||0)};markDirty();render();}}catch(err){}};
+  rd.onload=()=>{try{const j=JSON.parse(rd.result);if(j&&(Array.isArray(j.monthly)||Array.isArray(j.weekly))){
+    budget=normBudget(j);markDirty();render();}}catch(err){}};
   rd.readAsText(file);e.target.value='';}
 
 // ---------- master render ----------
@@ -887,7 +930,12 @@ seg('gran','gran');seg('vat','vat');seg('ymode','yc');seg('ymetric','ymetric');
 $('#bdistribute').addEventListener('click',()=>{const a=parseInt(($('#binput').value||'').replace(/\D/g,''))||0;if(a>0){distributeSeason(a);markDirty();render();}});
 $('#bflat').addEventListener('click',()=>{const a=parseInt(($('#binput').value||'').replace(/\D/g,''))||0;if(a>0){distributeFlat(a);markDirty();render();}});
 $('#bsave').addEventListener('click',()=>{doSave();});
-$('#breset').addEventListener('click',()=>{budget={year:CURYEAR,monthly:Array(12).fill(0)};markDirty();render();});
+$$('#bgran button').forEach(b=>b.addEventListener('click',()=>{
+  const g=b.dataset.bg;if(g===budget.gran)return;
+  const prevTotal=budgetTotal();budget.gran=g;
+  if(budgetTotal()===0&&prevTotal>0)distributeSeason(prevTotal); // bevar årsbudget ved skift
+  markDirty();render();}));
+$('#breset').addEventListener('click',()=>{budget=normBudget({year:CURYEAR,gran:budget.gran});markDirty();render();});
 $('#bexport').addEventListener('click',exportBudget);
 $('#bimportbtn').addEventListener('click',()=>$('#bimport').click());
 $('#bimport').addEventListener('change',importBudget);
