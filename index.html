@@ -168,6 +168,32 @@
     text-align:right;font-variant-numeric:tabular-nums;outline:none;padding:0;}
   .mcell.done{opacity:.6;}
   .mcell.done .mn .st{color:var(--good);}
+  /* uge-liste med foldbare dage */
+  .wlist{display:flex;flex-direction:column;gap:6px;margin-top:14px;max-height:340px;overflow-y:auto;padding-right:4px;}
+  .wrow{background:var(--surface-2);border:1px solid var(--line);border-radius:9px;}
+  .wrow.done{opacity:.8;}
+  .wtop{display:flex;align-items:center;gap:9px;padding:7px 10px;}
+  .wexp{border:0;background:none;color:var(--muted);cursor:pointer;font-size:12px;width:14px;flex:none;padding:0;}
+  .wexp:hover{color:var(--ink);}
+  .wlabel{font-size:12.5px;color:var(--ink-soft);}
+  .wlabel b{color:var(--ink);font-weight:600;}
+  .wstar{font-size:11px;color:var(--warn-ink);white-space:nowrap;}
+  .wtot{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);}
+  .wtot input{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px;
+    font-weight:600;width:96px;text-align:right;border-radius:7px;padding:5px 8px;outline:none;font-variant-numeric:tabular-nums;}
+  .wpct{min-width:42px;text-align:right;font-weight:600;}
+  .wdays{border-top:1px solid var(--line);padding:8px 10px 9px;display:flex;flex-direction:column;gap:5px;}
+  .dday{display:flex;align-items:center;gap:8px;}
+  .ddate{font-size:12px;color:var(--ink-soft);width:78px;flex:none;}
+  .ddate b{color:var(--ink);}
+  .docc{font-size:10.5px;background:var(--brand-wash);color:var(--brand-ink);border-radius:10px;padding:1px 7px;flex:none;white-space:nowrap;}
+  .damt{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:12.5px;width:88px;
+    text-align:right;border-radius:6px;padding:4px 7px;outline:none;font-variant-numeric:tabular-nums;}
+  .damt::placeholder{color:var(--muted);}
+  .dnote{flex:1;min-width:70px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;
+    font-size:12px;border-radius:6px;padding:4px 8px;outline:none;}
+  .damt:focus,.dnote:focus,.wtot input:focus{border-color:var(--brand);}
+  .whelp{font-size:11px;color:var(--muted);margin-top:2px;}
   .budgetsum{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;padding-top:13px;border-top:1px solid var(--line);}
   .budgetsum .bs{display:flex;flex-direction:column;gap:2px;}
   .budgetsum .bs .k{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;}
@@ -439,11 +465,35 @@ function ytd(year,metric){let s=0;for(const r of days){
 const BKEY='shlb_budget_v1';
 const storageOK=(()=>{try{localStorage.setItem('__t','1');localStorage.removeItem('__t');return true;}catch(e){return false;}})();
 let dirty=false;
+const openWeeks=new Set();   // hvilke uger er foldet ud (kun UI)
 let budget=loadBudget();
 function normBudget(b){b=b||{};b.year=b.year||CURYEAR;
   if(!Array.isArray(b.monthly)||b.monthly.length!==12)b.monthly=Array(12).fill(0);
   if(!Array.isArray(b.weekly)||b.weekly.length!==54)b.weekly=Array(54).fill(0);
+  if(!b.days||typeof b.days!=='object'||Array.isArray(b.days))b.days={};   // {"YYYY-MM-DD":{a,n}}
   if(b.gran!=='week')b.gran='month';return b;}
+// de 7 datoer (man–søn) i ISO-uge w for et år
+function weekDates(y,w){const jan4=new Date(Date.UTC(y,0,4));const dow=(jan4.getUTCDay()+6)%7;
+  const mon=new Date(jan4);mon.setUTCDate(jan4.getUTCDate()-dow+(w-1)*7);const out=[];
+  for(let i=0;i<7;i++){const d=new Date(mon);d.setUTCDate(mon.getUTCDate()+i);
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`);}
+  return out;}
+function easterSunday(y){const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,
+  f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,
+  l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),mo=Math.floor((h+l-7*m+114)/31),da=((h+l-7*m+114)%31)+1;
+  return new Date(Date.UTC(y,mo-1,da));}
+// kendt mærkedag for en dato (blomster-/begravelsesrelevant)
+function occasion(ds){const y=+ds.slice(0,4),mo=+ds.slice(5,7),da=+ds.slice(8,10);
+  const md=`${String(mo).padStart(2,'0')}-${String(da).padStart(2,'0')}`;
+  const fixed={'02-14':'Valentinsdag','06-05':'Fars dag','10-31':'Halloween','12-24':'Juleaften',
+    '12-25':'1. juledag','12-26':'2. juledag','12-31':'Nytårsaften','01-01':'Nytårsdag'};
+  if(fixed[md])return fixed[md];
+  const dt=new Date(Date.UTC(y,mo-1,da)),dow=dt.getUTCDay();
+  if(mo===5&&dow===0&&da>=8&&da<=14)return 'Mors dag';
+  if(mo===11&&dow===0&&da<=7)return 'Allehelgens dag';
+  const es=easterSunday(y),off=Math.round((dt-es)/86400000);
+  const em={'-7':'Palmesøndag','-3':'Skærtorsdag','-2':'Langfredag','0':'Påskedag','1':'2. påskedag'};
+  return em[String(off)]||'';}
 function loadBudget(){try{const j=JSON.parse(localStorage.getItem(BKEY));
   if(j&&(Array.isArray(j.monthly)||Array.isArray(j.weekly)))return normBudget(j);}catch(e){}
   return normBudget({year:CURYEAR});}
@@ -457,9 +507,19 @@ function weekMonth(){if(_WM&&_WMy===budget.year)return _WM;const y=+budget.year,
   _WM=wm;_WMy=budget.year;return wm;}
 function weeksInBudgetYear(){return Math.max(...Object.keys(weekMonth()).map(Number));}
 // budget pr. måned (fælles nævner uanset om der er indtastet pr. måned eller uge)
+// budget pr. dag i budgetåret: særlige dage bruger deres beløb, resten af ugen deler ugens rest
+function budgetDaily(){const out={},y=+budget.year,nW=weeksInBudgetYear();
+  for(let w=1;w<=nW;w++){const dates=weekDates(y,w);const wt=+budget.weekly[w]||0;
+    let sumE=0;const nonE=[],ent={};
+    dates.forEach(d=>{const e=budget.days[d];
+      if(e&&e.a!=null&&e.a!==''){ent[d]=+e.a||0;sumE+=+e.a||0;}else nonE.push(d);});
+    const rem=Math.max(0,wt-sumE),per=nonE.length?rem/nonE.length:0;
+    dates.forEach(d=>{out[d]=(d in ent)?ent[d]:per;});}
+  return out;}
 function budgetMonthly(){if(budget.gran!=='week')return budget.monthly.map(x=>+x||0);
-  const m=Array(12).fill(0),wm=weekMonth();
-  for(let w=1;w<=53;w++){const mo=wm[w];if(mo!=null)m[mo]+=+budget.weekly[w]||0;}return m;}
+  const m=Array(12).fill(0),bd=budgetDaily(),y=+budget.year;
+  for(const d in bd){const yy=+d.slice(0,4);let mo=+d.slice(5,7)-1;if(yy<y)mo=0;else if(yy>y)mo=11;m[mo]+=bd[d];}
+  return m;}
 // faktisk kassesalg pr. ISO-uge i budgetåret
 function posWeekly(){const wk={};for(const r of days){const[wy,w]=isoWeek(r.d);if(wy==budget.year)wk[w]=(wk[w]||0)+r.t;}return wk;}
 function weekWeights(){const wk={};for(const r of days){const[wy,w]=isoWeek(r.d);if(wy===2025)wk[w]=(wk[w]||0)+r.t;}
@@ -830,19 +890,63 @@ function renderBudget(){
     return `<div class="mcell${passed?' done':''}">
       <div class="mn"><span>${label}${passed?' ✓':''}</span>${stt}</div>
       <input data-k="${k}" data-i="${i}" type="text" inputmode="numeric" value="${bv?bv.toLocaleString('da-DK'):''}" placeholder="0"></div>`;};
-  let cellsHtml;
-  if(budget.gran==='week'){const pw=posWeekly(),nW=weeksInBudgetYear();
-    cellsHtml=Array.from({length:nW},(_,x)=>x+1).map(w=>{const a=pw[w];
-      return cell('w',w,'u'+w,+budget.weekly[w]||0,a==null?null:a,curYr&&a!=null);}).join('');
-  }else{cellsHtml=MON.map((mn,m)=>cell('m',m,mn,+budget.monthly[m]||0,
-      MTOT[CURYEAR]?MTOT[CURYEAR][m]:null,curYr&&m<=CURLAST)).join('');}
-  const gEl=$('#bmonths');gEl.innerHTML=cellsHtml;
-  gEl.style.maxHeight=budget.gran==='week'?'300px':'';gEl.style.overflowY=budget.gran==='week'?'auto':'';
+  const gEl=$('#bmonths');
+  if(budget.gran==='week'){
+    const y=+budget.year,pw=posWeekly(),nW=weeksInBudgetYear(),bd=budgetDaily(),WD=['man','tir','ons','tor','fre','lør','søn'];
+    let html='';
+    for(let w=1;w<=nW;w++){const dates=weekDates(y,w);
+      const eff=dates.reduce((s,d)=>s+(bd[d]||0),0),actual=pw[w],passed=curYr&&actual!=null,open=openWeeks.has(w);
+      const stars=dates.filter(d=>{const e=budget.days[d];return e&&((e.a!=null&&e.a!=='')||e.n);}).length;
+      let pctStr='';if(passed&&eff>0){const dd=actual/eff-1;
+        pctStr=`<span class="wpct" style="color:${dd>=0?'var(--good)':'#c0392b'}">${dd>=0?'+':''}${Math.round(dd*100)}%</span>`;}
+      const d0=`${+dates[0].slice(8,10)}/${+dates[0].slice(5,7)}`,d6=`${+dates[6].slice(8,10)}/${+dates[6].slice(5,7)}`;
+      html+=`<div class="wrow${passed?' done':''}"><div class="wtop">
+        <button class="wexp" data-w="${w}" aria-label="Fold ud">${open?'▾':'▸'}</button>
+        <span class="wlabel"><b>Uge ${w}</b> · ${d0}–${d6}${passed?' ✓':''}</span>
+        ${stars?`<span class="wstar">★ ${stars}</span>`:''}
+        <span class="wtot"><input data-k="w" data-i="${w}" type="text" inputmode="numeric" value="${budget.weekly[w]?(+budget.weekly[w]).toLocaleString('da-DK'):''}" placeholder="0">kr${pctStr}</span>
+      </div>`;
+      if(open){html+=`<div class="wdays">`;
+        dates.forEach((d,i)=>{const oc=occasion(d),e=budget.days[d]||{};
+          html+=`<div class="dday"><span class="ddate"><b>${WD[i]}</b> ${+d.slice(8,10)}/${+d.slice(5,7)}</span>
+            ${oc?`<span class="docc">${oc}</span>`:''}
+            <input class="damt" data-day="${d}" data-f="a" type="text" inputmode="numeric" value="${e.a!=null&&e.a!==''?(+e.a).toLocaleString('da-DK'):''}" placeholder="${Math.round(bd[d]||0).toLocaleString('da-DK')}">
+            <input class="dnote" data-day="${d}" data-f="n" type="text" value="${(e.n||'').replace(/"/g,'&quot;')}" placeholder="Note — hvorfor særlig omsætning?"></div>`;});
+        const sumE=dates.reduce((s,d)=>{const e=budget.days[d];return s+((e&&e.a!=null&&e.a!=='')?(+e.a||0):0);},0);
+        html+=`<div class="whelp" data-w="${w}">Særlige dage: ${kr(sumE)} af ugens ${kr(+budget.weekly[w]||0)} — resten fordeles på ugens øvrige dage (grå tal). Tom = auto.</div></div>`;}
+      html+=`</div>`;}
+    gEl.className='wlist';gEl.innerHTML=html;
+  }else{
+    gEl.className='mgrid';
+    gEl.innerHTML=MON.map((mn,m)=>cell('m',m,mn,+budget.monthly[m]||0,
+      MTOT[CURYEAR]?MTOT[CURYEAR][m]:null,curYr&&m<=CURLAST)).join('');
+  }
   $$('#bgran button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.bg===budget.gran?'true':'false'));
-  $$('#bmonths input').forEach(inp=>inp.addEventListener('change',()=>{
+  $$('#bmonths input[data-k]').forEach(inp=>inp.addEventListener('change',()=>{
     const val=parseInt(inp.value.replace(/\D/g,''))||0;
     if(inp.dataset.k==='w')budget.weekly[+inp.dataset.i]=val;else budget.monthly[+inp.dataset.i]=val;
-    markDirty();render();}));
+    inp.value=val?val.toLocaleString('da-DK'):'';budgetChanged();}));
+  $$('#bmonths input[data-day]').forEach(inp=>inp.addEventListener('change',()=>{
+    const d=inp.dataset.day;if(!budget.days[d])budget.days[d]={};
+    if(inp.dataset.f==='a'){const v=inp.value.replace(/\D/g,'');budget.days[d].a=v===''?null:parseInt(v)||0;
+      inp.value=v===''?'':parseInt(v).toLocaleString('da-DK');}
+    else budget.days[d].n=inp.value.trim();
+    const e=budget.days[d];if((e.a==null||e.a==='')&&!e.n)delete budget.days[d];
+    budgetChanged();}));
+  $$('#bmonths .wexp').forEach(btn=>btn.addEventListener('click',()=>{
+    const w=+btn.dataset.w;openWeeks.has(w)?openWeeks.delete(w):openWeeks.add(w);render();}));
+  renderBudgetSummary();
+}
+// opdater KUN opsummering/tal/grafer ved redigering — genopbygger IKKE inputfelterne (bevarer fokus)
+function budgetChanged(){markDirty();renderBudgetSummary();
+  const bd=budgetDaily();
+  $$('#bmonths .damt').forEach(x=>{x.placeholder=Math.round(bd[x.dataset.day]||0).toLocaleString('da-DK');});
+  $$('#bmonths .whelp[data-w]').forEach(el=>{const w=+el.dataset.w,dates=weekDates(+budget.year,w);
+    const sumE=dates.reduce((s,d)=>{const e=budget.days[d];return s+((e&&e.a!=null&&e.a!=='')?(+e.a||0):0);},0);
+    el.textContent=`Særlige dage: ${kr(sumE)} af ugens ${kr(+budget.weekly[w]||0)} — resten fordeles på ugens øvrige dage (grå tal). Tom = auto.`;});
+  if(document.getElementById('yearchart'))yearOverlay();}
+function renderBudgetSummary(){const total=budgetTotal();
+  const bi=$('#binput');if(bi&&document.activeElement!==bi)bi.value=total?total.toLocaleString('da-DK'):'';
   const total25=(MTOT['2025']||[]).reduce((s,v)=>s+(v||0),0);
   const parts=[`<div class="bs"><span class="k">Budget i alt ${budget.year}</span><span class="v">${kr(total)}</span></div>`];
   if(total>0&&total25>0){const gr=total/total25-1;
@@ -853,10 +957,9 @@ function renderBudget(){
       parts.push(`<div class="bs"><span class="k">Faktisk / budget (t.o.m. ${MON[CLASTFULL]})</span><span class="v" style="font-size:15px">${kr(aY)} / ${kr(bY)}</span></div>`);}}
   $('#bsum').innerHTML=parts.join('');
   $('#bhint').textContent=total>0
-    ?'Budgettet er inkl. moms (som kassen) og vises som stiplet linje på årsgrafen ovenfor. Ret en enkelt måned for at finjustere — husk at trykke “Gem”.'
-    :'Indtast et årsbudget og tryk “Fordel efter 2025-sæson” — så lægger jeg det ud på månederne efter sidste års mønster.';
-  updateSaveButton();
-}
+    ?'Uge-total = ugens budget. Fold en uge ud for at give særlige dage (Valentinsdag, Mors dag …) et beløb + note — resten af ugen fordeles automatisk. Husk “Gem”.'
+    :'Indtast et årsbudget og tryk “Fordel efter 2025-sæson” — så lægger jeg det ud efter sidste års mønster.';
+  updateSaveButton();}
 function fallbackDownload(fn,data){const b=new Blob([data],{type:'application/json'});const u=URL.createObjectURL(b);
   const a=document.createElement('a');a.href=u;a.download=fn;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 async function exportBudget(){const data=JSON.stringify(budget,null,2);const fn=`budget-soehoejlandet-${budget.year}.json`;
