@@ -194,6 +194,29 @@
     font-size:12px;border-radius:6px;padding:4px 8px;outline:none;}
   .damt:focus,.dnote:focus,.wtot input:focus{border-color:var(--brand);}
   .whelp{font-size:11px;color:var(--muted);margin-top:2px;}
+  /* auto-gem status + initialer */
+  .saverow{display:flex;align-items:center;gap:10px;}
+  .byname{border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink);font:inherit;font-size:13px;
+    width:110px;border-radius:8px;padding:6px 10px;outline:none;}
+  .byname:focus{border-color:var(--brand);}
+  .savestatus{font-size:12.5px;font-weight:600;white-space:nowrap;min-height:18px;}
+  .savestatus.save-clean{color:var(--good);}
+  .savestatus.save-pending{color:var(--warn-ink);}
+  .savestatus.save-warn{color:#c0392b;}
+  :root[data-theme=dark] .savestatus.save-warn{color:#e88;}
+  /* historik */
+  .histcols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:8px;}
+  @media(max-width:760px){.histcols{grid-template-columns:1fr;}}
+  .histh{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:8px;}
+  .histlist{display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto;}
+  .histrow{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;font-size:12.5px;}
+  .histwhen{color:var(--ink-soft);min-width:96px;}
+  .histby{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .histtot{font-weight:600;font-variant-numeric:tabular-nums;}
+  .histbtn{padding:3px 9px;font-size:12px;}
+  .histbtn.save-dirty{background:#e07b1a;color:#fff;border-color:transparent;}
+  .histempty{color:var(--muted);font-size:12.5px;padding:6px 2px;}
   .budgetsum{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;padding-top:13px;border-top:1px solid var(--line);}
   .budgetsum .bs{display:flex;flex-direction:column;gap:2px;}
   .budgetsum .bs .k{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;}
@@ -337,9 +360,12 @@
       <div class="hd">
         <div>
           <h2>Budget <span class="pill" id="budgetyear"></span></h2>
-          <div class="note">Sæt et årsbudget og fordel det efter sidste års sæson — eller ret hver måned. Klik <b>Gem budget</b>, så du kan vende tilbage og rette. Budgettet vises som stiplet linje på årsgrafen ovenfor.</div>
+          <div class="note">Sæt et årsbudget og fordel det efter sidste års sæson — eller ret hver måned/uge. Ændringer <b>gemmes automatisk</b> i den fælles database.</div>
         </div>
-        <button class="btn" id="bsave">Gem budget</button>
+        <div class="saverow">
+          <input id="byname" class="byname" type="text" maxlength="24" placeholder="Dine initialer" aria-label="Dine initialer (til loggen)">
+          <span id="bstatus" class="savestatus"></span>
+        </div>
       </div>
       <div class="budgethd">
         <div class="field">
@@ -370,6 +396,18 @@
         <button class="btn" id="bimportbtn">📂 Hent gemt budget</button>
         <input id="bimport" type="file" accept=".json,application/json" style="display:none">
         <button class="btn" id="breset">Nulstil</button>
+      </div>
+    </div>
+
+    <div class="card" id="histcard" style="display:none">
+      <div class="hd">
+        <div><h2>Budget-historik &amp; sikkerhedskopi</h2>
+          <div class="note">Hver ændring auto-gemmes og logges. Gendan budgettet fra en tidligere version eller fra en bestemt dag.</div></div>
+        <button class="btn" id="histrefresh">Opdatér</button>
+      </div>
+      <div class="histcols">
+        <div class="histcol"><div class="histh">Seneste ændringer</div><div id="histlog" class="histlist"></div></div>
+        <div class="histcol"><div class="histh">Daglige sikkerhedskopier</div><div id="histdaily" class="histlist"></div></div>
       </div>
     </div>
 
@@ -526,27 +564,27 @@ function weekWeights(){const wk={};for(const r of days){const[wy,w]=isoWeek(r.d)
   const tot=Object.values(wk).reduce((a,b)=>a+b,0);const nW=weeksInBudgetYear();const out={};
   for(let i=1;i<=nW;i++)out[i]=tot?(wk[i]||0)/tot:1/nW;return out;}
 function persist(){try{localStorage.setItem(BKEY,JSON.stringify(budget));return true;}catch(e){return false;}}
-function markDirty(){dirty=true;updateSaveButton();}
-async function doSave(){budget.savedAt=new Date().toISOString();
-  if(apiCfg){                                   // fælles database
-    const b=$('#bsave');if(b){b.className='btn';b.textContent='Gemmer…';b.disabled=true;}
-    try{await apiPut(budget);dirty=false;budget._shared=true;persist();
-      if(b)b.disabled=false;updateSaveButton();return;}
-    catch(e){if(b)b.disabled=false;budget._shared=false;
-      const ok=persist();dirty=!ok;updateSaveButton();
-      $('#bhint').textContent='Kunne ikke nå fælles-databasen (tjek forbindelsen). Budgettet er gemt lokalt — tryk “Gem” igen for at synkronisere.';return;}
-  }
-  const ok=persist();                            // kun lokal
-  if(!ok){dirty=true;updateSaveButton();$('#bhint').textContent='Kan ikke gemme i denne browser (privat tilstand eller lokal fil-visning). Brug “Gem som fil” som backup.';exportBudget();return;}
-  dirty=false;updateSaveButton();}
+// ---- AUTO-GEM til fælles database (ingen knap) ----
+let saveTimer=null,saveState='idle',lastSavedAt=null,savePending=false,byName='';
+try{byName=localStorage.getItem('shlb_by')||'';}catch(e){}
+function markDirty(){scheduleSave();}
+function scheduleSave(){persist();                          // lokal cache straks
+  if(!apiCfg){saveState='local';updateSaveStatus();return;}
+  savePending=true;saveState='pending';updateSaveStatus();
+  clearTimeout(saveTimer);saveTimer=setTimeout(doAutoSave,700);}
+async function doAutoSave(){if(!apiCfg)return;saveState='saving';updateSaveStatus();
+  try{await apiPut(budget);savePending=false;lastSavedAt=new Date();saveState='saved';updateSaveStatus();scheduleHistory();}
+  catch(e){saveState='error';updateSaveStatus();clearTimeout(saveTimer);saveTimer=setTimeout(doAutoSave,4000);}}
+function updateSaveStatus(){const el=$('#bstatus');if(!el)return;
+  const m={pending:['save-pending','● Gemmer…'],saving:['save-pending','● Gemmer…'],
+    saved:['save-clean','✓ Gemt '+(lastSavedAt?fmtSaved(lastSavedAt.toISOString()):'')+(apiCfg?' (fælles)':'')],
+    error:['save-warn','⚠ Kunne ikke gemme — prøver igen'],
+    local:['save-clean','✓ Gemt lokalt'],idle:['','']};
+  const a=m[saveState]||m.idle;el.className='savestatus '+a[0];el.textContent=a[1];}
+function updateSaveButton(){updateSaveStatus();}            // bagudkompatibel
 function fmtSaved(iso){try{const d=new Date(String(iso).replace(' ','T'));
   if(isNaN(d))return String(iso);
   return d.toLocaleString('da-DK',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
-function updateSaveButton(){const b=$('#bsave');if(!b)return;
-  if(!apiCfg&&!storageOK){b.className='btn save-warn';b.textContent='⚠ Auto-gem virker ikke her — brug “Gem som fil”';return;}
-  if(dirty){b.className='btn save-dirty';b.textContent='● Gem ændringer (IKKE gemt)';}
-  else if(budget.savedAt){b.className='btn save-clean';b.textContent='✓ Gemt'+(apiCfg?' (fælles)':'')+' '+fmtSaved(budget.savedAt);}
-  else{b.className='btn';b.textContent='Gem budget';}}
 function budgetTotal(){return budgetMonthly().reduce((s,v)=>s+(+v||0),0);}
 function seasonWeights(){ // 2025-sæson (fallback: jævnt)
   const src=MTOT['2025']||[];const tot=src.reduce((s,v)=>s+(v||0),0);
@@ -566,13 +604,41 @@ async function apiGet(){const r=await fetch(apiCfg.url,{headers:{'X-Budget-Token
   if(!r.ok)throw new Error('get '+r.status);return await r.json();}
 async function apiPut(b){const r=await fetch(apiCfg.url,{method:'POST',
   headers:{'Content-Type':'application/json','X-Budget-Token':apiCfg.token},
-  body:JSON.stringify({budget:b,by:''})});if(!r.ok)throw new Error('put '+r.status);return await r.json();}
+  body:JSON.stringify({budget:b,by:byName,total:Math.round(budgetTotal())})});if(!r.ok)throw new Error('put '+r.status);return await r.json();}
 async function syncFromServer(){if(!apiCfg)return;
   try{const j=await apiGet();
     if(j&&j.ok&&j.budget&&(Array.isArray(j.budget.monthly)||Array.isArray(j.budget.weekly))){
-      budget=normBudget(j.budget);budget.savedAt=j.updated_at||budget.savedAt||null;
-      dirty=false;render();}
+      budget=normBudget(j.budget);
+      if(j.updated_at){lastSavedAt=new Date(String(j.updated_at).replace(' ','T'));saveState='saved';}
+      render();}
+    fetchHistory();
   }catch(e){/* offline → behold lokal kopi */}}
+// ---- ændringslog & daglig backup ----
+let histTimer=null;
+function scheduleHistory(){clearTimeout(histTimer);histTimer=setTimeout(fetchHistory,600);}
+function esc(s){return String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));}
+async function fetchHistory(){if(!apiCfg)return;const hc=$('#histcard');if(hc)hc.style.display='';
+  const H=t=>fetch(apiCfg.url+'?'+t+'=1',{headers:{'X-Budget-Token':apiCfg.token}}).then(r=>r.json());
+  try{const[log,daily]=await Promise.all([H('log'),H('daily')]);
+    renderHistList($('#histlog'),(log&&log.entries)||[],false);
+    renderHistList($('#histdaily'),(daily&&daily.entries)||[],true);
+  }catch(e){}}
+function fmtWhen(ts,daily){const d=new Date(String(ts).replace(' ','T'));if(isNaN(d))return ts;
+  return daily?d.toLocaleDateString('da-DK',{weekday:'short',day:'2-digit',month:'2-digit'})
+    :d.toLocaleString('da-DK',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}
+function renderHistList(el,entries,daily){if(!el)return;
+  if(!entries.length){el.innerHTML='<div class="histempty">Ingen endnu.</div>';return;}
+  el.innerHTML=entries.map(e=>`<div class="histrow"><span class="histwhen">${fmtWhen(e.ts,daily)}</span>
+    <span class="histby">${e.by?esc(e.by):'—'}</span><span class="histtot">${kr(e.total)}</span>
+    <button class="btn histbtn" data-snap="${e.id}">Gendan</button></div>`).join('');
+  el.querySelectorAll('.histbtn').forEach(b=>b.addEventListener('click',()=>restoreSnapshot(+b.dataset.snap,b)));}
+async function restoreSnapshot(id,btn){
+  if(btn&&btn.dataset.confirm!=='1'){btn.dataset.confirm='1';btn.textContent='Bekræft?';btn.classList.add('save-dirty');
+    setTimeout(()=>{if(btn){btn.dataset.confirm='0';btn.textContent='Gendan';btn.classList.remove('save-dirty');}},3500);return;}
+  try{const j=await fetch(apiCfg.url+'?snapshot='+id,{headers:{'X-Budget-Token':apiCfg.token}}).then(r=>r.json());
+    if(j&&j.ok&&j.budget){budget=normBudget(j.budget);render();markDirty();
+      const el=$('#bstatus');if(el){el.className='savestatus save-pending';el.textContent='↩ Gendannet — gemmer…';}}
+  }catch(e){}}
 
 // ---------- helpers ----------
 function fmtDate(s){const[y,m,d]=s.split('-');return `${d}.${m}.${y.slice(2)}`;}
@@ -957,7 +1023,7 @@ function renderBudgetSummary(){const total=budgetTotal();
       parts.push(`<div class="bs"><span class="k">Faktisk / budget (t.o.m. ${MON[CLASTFULL]})</span><span class="v" style="font-size:15px">${kr(aY)} / ${kr(bY)}</span></div>`);}}
   $('#bsum').innerHTML=parts.join('');
   $('#bhint').textContent=total>0
-    ?'Uge-total = ugens budget. Fold en uge ud for at give særlige dage (Valentinsdag, Mors dag …) et beløb + note — resten af ugen fordeles automatisk. Husk “Gem”.'
+    ?'Uge-total = ugens budget. Fold en uge ud for at give særlige dage (Valentinsdag, Mors dag …) et beløb + note — resten af ugen fordeles automatisk. Alt gemmes automatisk.'
     :'Indtast et årsbudget og tryk “Fordel efter 2025-sæson” — så lægger jeg det ud efter sidste års mønster.';
   updateSaveButton();}
 function fallbackDownload(fn,data){const b=new Blob([data],{type:'application/json'});const u=URL.createObjectURL(b);
@@ -1032,7 +1098,6 @@ seg('gran','gran');seg('vat','vat');seg('ymode','yc');seg('ymetric','ymetric');
 // budget controls
 $('#bdistribute').addEventListener('click',()=>{const a=parseInt(($('#binput').value||'').replace(/\D/g,''))||0;if(a>0){distributeSeason(a);markDirty();render();}});
 $('#bflat').addEventListener('click',()=>{const a=parseInt(($('#binput').value||'').replace(/\D/g,''))||0;if(a>0){distributeFlat(a);markDirty();render();}});
-$('#bsave').addEventListener('click',()=>{doSave();});
 $$('#bgran button').forEach(b=>b.addEventListener('click',()=>{
   const g=b.dataset.bg;if(g===budget.gran)return;
   const prevTotal=budgetTotal();budget.gran=g;
@@ -1042,8 +1107,11 @@ $('#breset').addEventListener('click',()=>{budget=normBudget({year:CURYEAR,gran:
 $('#bexport').addEventListener('click',exportBudget);
 $('#bimportbtn').addEventListener('click',()=>$('#bimport').click());
 $('#bimport').addEventListener('change',importBudget);
-// advar ved ugemte ændringer
-window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+// initialer (til loggen) + historik-opdatering
+(function(){const el=$('#byname');if(el){el.value=byName;el.addEventListener('change',()=>{byName=el.value.trim();try{localStorage.setItem('shlb_by',byName);}catch(e){}});}
+  const rf=$('#histrefresh');if(rf)rf.addEventListener('click',fetchHistory);})();
+// advar kun hvis en gemning stadig er undervejs
+window.addEventListener('beforeunload',e=>{if(savePending){e.preventDefault();e.returnValue='';}});
 
 // range slider
 const r0=$('#r0'),r1=$('#r1');r0.max=r1.max=N-1;r1.value=N-1;
